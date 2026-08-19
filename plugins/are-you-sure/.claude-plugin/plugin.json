@@ -1,0 +1,20 @@
+{
+  "name": "are-you-sure",
+  "displayName": "Are You Sure?",
+  "description": "Challenges the agent's own claims before it is allowed to finish. Injects an evidence contract before generation, then blocks the stop when a message asserts things it never proved — claimed verification with nothing executed, conclusions with no citation, absolutes with no search.",
+  "keywords": [
+    "hooks",
+    "verification",
+    "evidence",
+    "hallucination",
+    "quality",
+    "review"
+  ],
+  "author": {
+    "name": "David Mendez",
+    "email": "david.mendez@humblebundle.com"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/davidmendez-orium/are-you-sure",
+  "homepage": "https://github.com/davidmendez-orium/are-you-sure"
+}
