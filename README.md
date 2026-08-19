@@ -72,15 +72,19 @@ every turn. To find out which case you're in, run it in a Cowork session:
 sh "$CLAUDE_PLUGIN_ROOT/hooks/are-you-sure.sh" --selftest
 ```
 
+`RESULT: OK` means the enforcement half works there. A `FAIL` line means no interpreter,
+so only the skill half is live. Run on macOS / Claude Code, it prints:
+
 ```
-are-you-sure selftest — /usr/bin/python3 (3.14.6)
+are-you-sure selftest — /opt/homebrew/opt/python@3.14/bin/python3.14 (3.14.6)
   caught: you wrote "I verified" but ran no test, build, or command this turn — nothing was verified, only read
   caught: you assert "The root cause is" having neither opened a file nor cited a source this turn
+  contract: 767 chars
   RESULT: OK — the hook works in this environment
 ```
 
-`RESULT: OK` means the enforcement half works there. A `FAIL` line means no interpreter,
-so only the skill half is live.
+The interpreter path and version will differ inside Cowork's VM; the `RESULT` line is
+the part to read.
 
 ## How it works
 
