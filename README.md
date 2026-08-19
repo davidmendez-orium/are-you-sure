@@ -47,7 +47,7 @@ Requires `python3` on `PATH` and nothing else — no dependencies, stdlib only.
 
 | Half | Event | What it does | Cost |
 |---|---|---|---|
-| Prevention | `UserPromptSubmit` | injects the evidence contract **before** generation | ~140 tokens per turn |
+| Prevention | `UserPromptSubmit` | injects the evidence contract **before** generation | ~168 tokens per session |
 | Enforcement | `Stop`, `SubagentStop` | inspects what was written, blocks unearned claims | one extra pass, only when it fires |
 
 **Be clear about the ordering, because it decides what this can and cannot do:** a
@@ -90,7 +90,7 @@ cannot talk its way past this one by describing a test run it never performed.
 |---|---|---|
 | `ARE_YOU_SURE_MAX_PER_TURN` | `1` | challenges per user prompt |
 | `ARE_YOU_SURE_MAX_PER_SESSION` | `25` | budget for a whole session |
-| `ARE_YOU_SURE_MIN_CHARS` | `200` | shorter messages are treated as conversation |
+| `ARE_YOU_SURE_MIN_CHARS` | `120` | shorter messages are treated as conversation |
 | `ARE_YOU_SURE_LOG` | `~/.claude/logs/are-you-sure.log` | `off` to disable |
 
 ## What it will not do
@@ -143,11 +143,14 @@ missing UNVERIFIED label is how a blocker gets reported as done.
 python3 plugins/are-you-sure/tests/test_are_you_sure.py
 ```
 
-24 tests, stdlib `unittest`, no dependencies. They drive the hook as a subprocess with
+27 tests, stdlib `unittest`, no dependencies. They drive the hook as a subprocess with
 JSON on stdin exactly as Claude Code does, so the contract itself is what's covered —
-including the loop guards, the handback cases, and the transcript parsing detail that
-tool results arrive as `type: "user"` rows and must not be mistaken for your next
-prompt. All 24 pass on Python 3.14.6 / macOS.
+the loop guards, the handback cases, and the two transcript shapes that cost the most
+to learn: **tool results and system reminders both arrive as `type: "user"` rows**, and
+treating either as the start of your turn hides every tool call before it, so a
+well-evidenced message reads as unevidenced and gets challenged anyway. Real prompts
+carry `content` as a string; injections are flagged `isMeta`. All 27 pass on Python
+3.14.6 / macOS.
 
 ## Repo layout
 

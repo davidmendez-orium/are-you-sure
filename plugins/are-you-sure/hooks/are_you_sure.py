@@ -25,7 +25,7 @@ Modes (``ARE_YOU_SURE_MODE``):
 Other env:
     ARE_YOU_SURE_MAX_PER_TURN    challenges per user prompt (default 1)
     ARE_YOU_SURE_MAX_PER_SESSION challenge budget for a session (default 25)
-    ARE_YOU_SURE_MIN_CHARS       messages shorter than this are conversational (default 200)
+    ARE_YOU_SURE_MIN_CHARS       messages shorter than this are conversational (default 120)
     ARE_YOU_SURE_STATE_DIR       default ~/.claude/are-you-sure
     ARE_YOU_SURE_LOG             default ~/.claude/logs/are-you-sure.log; "off" disables
 
@@ -206,12 +206,33 @@ def budget_exhausted(session_id: str, prompt_id: str) -> str | None:
 # transcript — what did the agent actually do this turn?
 # --------------------------------------------------------------------------
 
-def turn_tool_uses(transcript_path: str) -> list[dict]:
-    """Tool uses since the last genuine human prompt.
+META_PREFIXES = ("<system-reminder>", "<local-command-caveat>", "<command-message>")
 
-    Tool results arrive as ``type: "user"`` rows too, so a row only ends the
-    turn if it carries no ``tool_result`` block.
+
+def is_turn_boundary(row: dict, blocks: list) -> bool:
+    """True only for a genuine human prompt.
+
+    Two kinds of ``type: "user"`` row are not the human speaking, and treating
+    either as the start of the turn hides every tool call before it — which reads
+    as "this turn proved nothing" and turns the checker into a false-positive
+    machine:
+
+    * tool results, which carry a ``tool_result`` block;
+    * harness injections — system reminders, command caveats — flagged ``isMeta``.
     """
+    if any(b.get("type") == "tool_result" for b in blocks if isinstance(b, dict)):
+        return False
+    if row.get("isMeta"):
+        return False
+    message = row.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str) and content.lstrip().startswith(META_PREFIXES):
+        return False
+    return True
+
+
+def turn_tool_uses(transcript_path: str) -> list[dict]:
+    """Tool uses since the last genuine human prompt."""
     path = Path(str(transcript_path or "").strip() or "/nonexistent")
     if not path.is_file():
         return []
@@ -231,7 +252,7 @@ def turn_tool_uses(transcript_path: str) -> list[dict]:
         content = row.get("message", {}).get("content") if isinstance(row.get("message"), dict) else None
         blocks = content if isinstance(content, list) else []
         if row.get("type") == "user":
-            if not any(b.get("type") == "tool_result" for b in blocks if isinstance(b, dict)):
+            if is_turn_boundary(row, blocks):
                 break
             continue
         if row.get("type") == "assistant":
@@ -425,7 +446,7 @@ def handle_stop(data: dict, event: str) -> None:
     message = str(data.get("last_assistant_message", "") or "").strip()
     if not message:
         message = last_assistant_text(str(data.get("transcript_path", "") or ""))
-    if len(message) < max(0, env_int("ARE_YOU_SURE_MIN_CHARS", 200)):
+    if len(message) < max(0, env_int("ARE_YOU_SURE_MIN_CHARS", 120)):
         log(f"{event} allow (message too short to carry a claim)")
         return
 

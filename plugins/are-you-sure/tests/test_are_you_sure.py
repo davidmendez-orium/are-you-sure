@@ -26,7 +26,18 @@ def transcript(rows: list[dict], directory: Path) -> str:
 
 
 def user_prompt(text: str = "do the thing") -> dict:
-    return {"type": "user", "message": {"content": [{"type": "text", "text": text}]}}
+    # Real prompts carry content as a plain string, not a block list.
+    return {"type": "user", "userType": "external", "message": {"role": "user", "content": text}}
+
+
+def system_reminder(text: str = "<system-reminder>\nBackground context.\n</system-reminder>") -> dict:
+    """A harness injection. Shaped like a user row, flagged isMeta, not the human."""
+    return {"type": "user", "isMeta": True, "userType": "external",
+            "message": {"role": "user", "content": text}}
+
+
+def attachment_row() -> dict:
+    return {"type": "attachment", "message": None}
 
 
 def tool_result(name: str = "Bash") -> dict:
@@ -317,6 +328,50 @@ class TestRobustness(HookCase):
             "transcript_path": transcript(rows, self.tmp),
         }
         self.assertBlocked(self.run_hook(payload))
+
+    def test_a_system_reminder_does_not_end_the_turn(self) -> None:
+        # Injections are shaped like user rows. Letting one end the turn hides every
+        # tool call before it, so a well-evidenced message reads as unevidenced and
+        # gets challenged anyway — the false positive that matters.
+        rows = [
+            user_prompt(),
+            tool_use("Bash", command="pytest tests/ -q"),
+            tool_result(),
+            system_reminder(),
+            attachment_row(),
+            tool_use("Read", file_path="/app/x.ts"),
+            tool_result(),
+        ]
+        result = self.run_hook(self.stop_payload(
+            "I verified the fix works — pytest reports 8 passed, 0 failed." + PADDING, rows,
+        ))
+        self.assertAllowed(result)
+
+    def test_the_previous_turn_is_not_credited_to_this_one(self) -> None:
+        # The boundary still has to hold: execution before the human's last prompt
+        # is not evidence for a claim made after it.
+        rows = [
+            user_prompt("first ask"),
+            tool_use("Bash", command="pytest tests/ -q"),
+            tool_result(),
+            user_prompt("second ask"),
+            tool_use("Read", file_path="/app/x.ts"),
+            tool_result(),
+        ]
+        self.assertBlocked(self.run_hook(self.stop_payload(
+            "I verified the fix works and all tests pass." + PADDING, rows,
+        )))
+
+    def test_a_short_confident_claim_is_still_checked(self) -> None:
+        # 177 chars — under the old 200-char floor, and exactly the shape of message
+        # that most needs challenging.
+        message = (
+            "The root cause is that the marketplace cache was stale, and nothing else in "
+            "the loader touches that path, so this is safe to land. I checked it and it "
+            "works now."
+        )
+        self.assertLess(len(message), 200)
+        self.assertBlocked(self.run_hook(self.stop_payload(message, [user_prompt()])))
 
     def test_tool_results_do_not_end_the_turn(self) -> None:
         # The execution sits behind two tool_result rows; those arrive as type=user and
