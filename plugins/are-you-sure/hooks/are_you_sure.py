@@ -475,7 +475,40 @@ def handle_stop(data: dict, event: str) -> None:
     })
 
 
+SELFTEST_BLOCK = {
+    "hook_event_name": "Stop",
+    "session_id": "selftest",
+    "prompt_id": "selftest",
+    "transcript_path": "",
+    "last_assistant_message": (
+        "I verified the fix works and all tests pass. The root cause is a stale cache "
+        "key, and nothing else references that helper, so this is safe to land now."
+    ),
+}
+
+
+def selftest() -> int:
+    """Prove the checker runs here. Works in any environment, writes nothing."""
+    import tempfile
+
+    print(f"are-you-sure selftest — {sys.executable} ({sys.version.split()[0]})")
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["ARE_YOU_SURE_STATE_DIR"] = tmp
+        os.environ["ARE_YOU_SURE_LOG"] = "off"
+        items = findings(str(SELFTEST_BLOCK["last_assistant_message"]),
+                         {"reads": 0, "executed": False, "handing_off": False},
+                         "heuristic")
+        ok = len(items) >= 1 and bool(CONTRACT.strip())
+        for item in items:
+            print(f"  caught: {item}")
+        print(f"  contract: {len(CONTRACT)} chars")
+        print("  RESULT:", "OK — the hook works in this environment" if ok else "FAIL")
+    return 0 if ok else 1
+
+
 def main() -> int:
+    if "--selftest" in sys.argv[1:]:
+        return selftest()
     try:
         raw = sys.stdin.read()
     except OSError:

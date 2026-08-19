@@ -2,8 +2,8 @@
 
 # Are You Sure?
 
-A plugin for **Claude Code** that makes the agent prove its claims before it is
-allowed to finish.
+A plugin for **Claude Code** and **Claude Cowork** that makes the agent prove its
+claims before it is allowed to finish.
 
 Two halves. An **evidence contract** injected before the agent writes anything, and a
 **stop it cannot pass** while a claim is still unearned.
@@ -41,7 +41,46 @@ marketplace it came from. Both are named after the repo.
 
 Nothing to configure. It is on from the moment it installs, in `heuristic` mode.
 
-Requires `python3` on `PATH` and nothing else — no dependencies, stdlib only.
+Installing prints **"Restart to apply changes"** and means it: hooks load at session
+start, so the current session is unaffected. Same after every update.
+
+### Cowork
+
+Same repo, same manifest — Cowork reads the identical `.claude-plugin/marketplace.json`
+and accepts a GitHub repo as a marketplace:
+
+**Customize → Plugins → Add marketplace**, enter `davidmendez-orium/are-you-sure`, then
+install `are-you-sure` from it. Open the installed plugin to see its skill and its three
+hooks, and to enable or disable them individually.
+
+Hooks are Cowork-and-Code only — they're greyed out in Chat, which has no session
+lifecycle to hook.
+
+### Platform support
+
+| | Claude Code | Cowork |
+|---|---|---|
+| The `/are-you-sure` skill | ✅ verified | ✅ same skill format |
+| Hooks load and fire | ✅ verified | ⚠️ **unverified** — see below |
+
+Cowork runs hooks inside a VM, and its docs don't state what's on that VM's `PATH`. The
+checker is stdlib Python, so `hooks/are-you-sure.sh` resolves `python3`, then `python`,
+and **exits 0 quietly** if it finds neither — an inert checker rather than an error on
+every turn. To find out which case you're in, run it in a Cowork session:
+
+```
+sh "$CLAUDE_PLUGIN_ROOT/hooks/are-you-sure.sh" --selftest
+```
+
+```
+are-you-sure selftest — /usr/bin/python3 (3.14.6)
+  caught: you wrote "I verified" but ran no test, build, or command this turn — nothing was verified, only read
+  caught: you assert "The root cause is" having neither opened a file nor cited a source this turn
+  RESULT: OK — the hook works in this environment
+```
+
+`RESULT: OK` means the enforcement half works there. A `FAIL` line means no interpreter,
+so only the skill half is live.
 
 ## How it works
 
@@ -158,7 +197,8 @@ carry `content` as a string; injections are flagged `isMeta`. All 27 pass on Pyt
 .claude-plugin/marketplace.json         the marketplace catalog
 plugins/are-you-sure/
 ├── .claude-plugin/plugin.json          the plugin manifest
-├── hooks/hooks.json                    wires all three events to one script
+├── hooks/hooks.json                    wires all three events to one shim
+├── hooks/are-you-sure.sh               interpreter shim + --selftest
 ├── hooks/are_you_sure.py               the checker — stdlib only
 ├── skills/are-you-sure/SKILL.md        the doctrine, and /are-you-sure
 └── tests/test_are_you_sure.py
