@@ -165,6 +165,12 @@ One script serves all three events and dispatches on `hook_event_name`. `plugin.
 deliberately omits `version`, so installs track the git commit SHA and every push
 reaches users without a version bump.
 
+If you fork this, note that a hook `command` must be a **string** —
+`python3 "${CLAUDE_PLUGIN_ROOT}/hooks/are_you_sure.py"`. The exec-array form
+(`["python3", "…"]`) that the plugin reference calls "recommended" is rejected by the
+hook loader with `expected string, received array`, and `claude plugin validate` does
+**not** catch it: validation passes and the plugin then fails to load at install time.
+
 ## License
 
 MIT

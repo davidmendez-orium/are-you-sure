@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/are_you_sure.py"]
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/are_you_sure.py\""
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/are_you_sure.py"]
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/are_you_sure.py\""
           }
         ]
       }
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/are_you_sure.py"]
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/are_you_sure.py\""
           }
         ]
       }
