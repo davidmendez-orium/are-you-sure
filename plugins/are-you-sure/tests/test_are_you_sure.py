@@ -256,6 +256,23 @@ class TestNeverTrapsTheSession(HookCase):
             ARE_YOU_SURE_MAX_PER_SESSION=1,
         ))
 
+    def test_an_unrecordable_challenge_is_not_issued(self) -> None:
+        # Both loop guards read the state file, so a challenge that cannot be recorded
+        # is one that would repeat forever. Blocking is gated on persisting the count.
+        readonly = self.tmp / "readonly"
+        readonly.mkdir()
+        readonly.chmod(0o500)
+        self.addCleanup(readonly.chmod, 0o700)
+
+        rows = [user_prompt()]
+        message = "The root cause is a stale cache key and nothing else references it." + PADDING
+        for attempt in range(4):
+            result = self.run_hook(
+                self.stop_payload(message, rows, prompt_id=f"p-{attempt}"),
+                ARE_YOU_SURE_STATE_DIR=str(readonly / "state"),
+            )
+            self.assertAllowed(result)
+
     def test_short_conversational_replies_are_left_alone(self) -> None:
         result = self.run_hook(self.stop_payload("Done — it works now.", [user_prompt()]))
         self.assertAllowed(result)

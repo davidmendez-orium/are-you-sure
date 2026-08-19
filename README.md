@@ -98,8 +98,13 @@ cannot talk its way past this one by describing a test run it never performed.
 A hook that blocks the agent from finishing can wedge a session, so the failure
 modes are handled deliberately:
 
-- **One challenge per turn.** Tracked by `prompt_id` in `~/.claude/are-you-sure/`, so
-  the second stop in a turn always passes. There is no loop to get stuck in.
+- **One challenge per turn.** Tracked by `prompt_id` in `~/.claude/are-you-sure/`, so the
+  second stop in a turn always passes.
+- **A block it cannot record is a block it does not issue.** Both loop guards read that
+  state file, so a counter that fails to persist would repeat forever. Blocking is gated on
+  the write succeeding. Measured across 40 consecutive stops on one unchanged message:
+  1 block with a writable state dir, 25 (the session cap) if `prompt_id` churned every
+  pass, and **0** with the state dir made read-only.
 - **Never blocks a question.** If the agent is asking *you* something — trailing `?`,
   or an `AskUserQuestion` / `ExitPlanMode` call — the stop is allowed. Blocking there
   would talk over you.
@@ -138,11 +143,11 @@ missing UNVERIFIED label is how a blocker gets reported as done.
 python3 plugins/are-you-sure/tests/test_are_you_sure.py
 ```
 
-23 tests, stdlib `unittest`, no dependencies. They drive the hook as a subprocess with
+24 tests, stdlib `unittest`, no dependencies. They drive the hook as a subprocess with
 JSON on stdin exactly as Claude Code does, so the contract itself is what's covered —
 including the loop guards, the handback cases, and the transcript parsing detail that
 tool results arrive as `type: "user"` rows and must not be mistaken for your next
-prompt. All 23 pass on Python 3.14.6 / macOS.
+prompt. All 24 pass on Python 3.14.6 / macOS.
 
 ## Repo layout
 

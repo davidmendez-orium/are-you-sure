@@ -167,7 +167,13 @@ def read_counters(session_id: str) -> dict:
         return {}
 
 
-def bump_counter(session_id: str, prompt_id: str) -> None:
+def bump_counter(session_id: str, prompt_id: str) -> bool:
+    """Record a challenge. Returns False if it could not be persisted.
+
+    The return value gates the block itself. Both loop guards read this file, so a
+    counter that cannot be written is a counter that never stops anything — and an
+    unwritable state directory would otherwise mean blocking every stop forever.
+    """
     path = counter_path(session_id)
     counters = read_counters(session_id)
     counters["session_total"] = int(counters.get("session_total", 0)) + 1
@@ -180,8 +186,9 @@ def bump_counter(session_id: str, prompt_id: str) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(counters), encoding="utf-8")
+        return True
     except OSError:
-        pass
+        return False
 
 
 def budget_exhausted(session_id: str, prompt_id: str) -> str | None:
@@ -433,7 +440,10 @@ def handle_stop(data: dict, event: str) -> None:
         log(f"{event} allow (claims are grounded: reads={ev['reads']} executed={ev['executed']})")
         return
 
-    bump_counter(session_id, prompt_id)
+    if not bump_counter(session_id, prompt_id):
+        log(f"{event} allow (could not record the challenge — refusing to risk a loop)")
+        return
+
     log(f"{event} BLOCK ({len(items)}): " + " | ".join(items))
     emit({
         "hookSpecificOutput": {
