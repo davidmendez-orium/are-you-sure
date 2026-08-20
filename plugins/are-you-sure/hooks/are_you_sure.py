@@ -310,6 +310,25 @@ def evidence(uses: list[dict]) -> dict:
 # the checks
 # --------------------------------------------------------------------------
 
+NEGATION_RE = re.compile(
+    r"\b(not|never|no|nothing|none|cannot|can't|won't|couldn't|haven't|hasn't|hadn't"
+    r"|didn't|don't|doesn't|without|unable|yet\s+to|rather\s+than|instead\s+of)\b",
+    re.I,
+)
+
+
+def negated(prose: str, start: int) -> bool:
+    """Is this match inside a denial?
+
+    "I have not verified it" contains the word *verified*, and reading that as a
+    verification claim inverts the whole point: the checker would challenge the
+    honest labelling it asks for, and the more truthful the answer the harder it
+    gets hit. Only the clause matters, so the scan stops at sentence punctuation.
+    """
+    clause = re.split(r"[.;:!?\n]", prose[:start])[-1]
+    return bool(NEGATION_RE.search(clause[-60:]))
+
+
 def strip_quotes(text: str) -> str:
     """Drop fenced blocks and quoted lines: they are usually someone else's words."""
     without_fences = re.sub(r"```.*?```", " ", text, flags=re.S)
@@ -329,50 +348,53 @@ def is_handback(text: str) -> bool:
     return tail.endswith("?") or bool(re.search(r"\b(let me know|which (?:one|would)|shall i|want me to|your call)\b", tail, re.I))
 
 
-def findings(message: str, ev: dict, active: str) -> list[str]:
+def findings(message: str, ev: dict, active: str) -> list[dict]:
+    """Each finding carries its rule, the sentence shown to the agent, and the exact
+    phrase that triggered it — the phrase is what makes retraction measurable later.
+    """
     prose = strip_quotes(message)
     citations = cited(message)
-    out: list[str] = []
+    out: list[dict] = []
 
-    claimed = VERIFICATION_RE.search(prose)
+    def add(rule: str, phrase: str, text: str) -> None:
+        out.append({"rule": rule, "phrase": phrase.strip(), "text": text})
+
+    claimed = next(
+        (mt for mt in VERIFICATION_RE.finditer(prose) if not negated(prose, mt.start())),
+        None,
+    )
     if claimed and not ev["executed"]:
-        out.append(
+        add("claimed-verification", claimed.group(0),
             f'you wrote "{claimed.group(0).strip()}" but ran no test, build, or command '
-            "this turn — nothing was verified, only read"
-        )
+            "this turn — nothing was verified, only read")
 
     if active in ("heuristic", "strict"):
         claim = CLAIM_RE.search(prose)
         if claim and ev["reads"] == 0 and citations == 0:
-            out.append(
+            add("uncited-conclusion", claim.group(0),
                 f'you assert "{claim.group(0).strip()}" having neither opened a file nor '
-                "cited a source this turn"
-            )
+                "cited a source this turn")
         elif claim and citations == 0:
-            out.append(
+            add("uncited-conclusion", claim.group(0),
                 f'you assert "{claim.group(0).strip()}" with no citation — no file:line, '
-                "command output, or URL a reader could check"
-            )
+                "command output, or URL a reader could check")
 
     if active == "strict":
         absolute = ABSOLUTE_RE.search(prose)
         if absolute:
-            out.append(
+            add("unsearched-absolute", absolute.group(0),
                 f'"{absolute.group(0).strip()}" is an exhaustive claim — it needs the search '
-                "that would have found a counterexample"
-            )
+                "that would have found a counterexample")
         vague = VAGUE_COUNT_RE.search(prose)
         if vague:
-            out.append(
+            add("estimated-count", vague.group(0),
                 f'"{vague.group(0).strip()}" estimates a count you could have enumerated — '
-                "give the number and what it counts"
-            )
+                "give the number and what it counts")
         hedge = HEDGE_AS_FACT_RE.search(prose)
         if hedge:
-            out.append(
+            add("hedge-as-conclusion", hedge.group(0),
                 f'"{hedge.group(0).strip()}" is a guess dressed as a conclusion — either '
-                "settle it or label it a guess and say what would settle it"
-            )
+                "settle it or label it a guess and say what would settle it")
 
     return out
 
@@ -395,9 +417,17 @@ user. Correct the substance and carry on.
 """.strip()
 
 
-def challenge_text(items: list[str]) -> str:
-    bullets = "\n".join(f"  • {item}" for item in items)
+def challenge_text(items: list[dict]) -> str:
+    bullets = "\n".join(f"  • {item['text']}" for item in items)
     return f"{CHALLENGE_HEADER}\n\nThis message claims more than it proved:\n{bullets}\n\n{CHALLENGE_FOOTER}"
+
+
+# An honest label, which is one of the three allowed exits.
+LABEL_RE = re.compile(
+    r"\b(INFERRED|ASSUMED|UNVERIFIED|by inspection|not (?:yet )?(?:run|observed|verified|tested)"
+    r"|have not (?:run|verified|tested)|cannot (?:verify|confirm)|unverified)\b",
+    re.I,
+)
 
 
 CONTRACT = """
@@ -434,23 +464,77 @@ def handle_prompt_submit() -> None:
     })
 
 
+def db():
+    """The recorder, or None. Telemetry is optional; the hook is not."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import ays_db
+
+        return ays_db
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def resolve(session_id: str, prompt_id: str, message: str, ev: dict, uses: int) -> None:
+    """Measure what the agent did with a challenge it was given earlier this turn.
+
+    Called on the stop *after* a block, which is the revision. Everything compared
+    here is countable — no model is asked whether it improved its own answer.
+    """
+    recorder = db()
+    if recorder is None:
+        return
+    row = recorder.open_challenge(session_id, prompt_id)
+    if row is None:
+        return
+
+    after_cites = cited(message)
+    remaining = findings(message, ev, mode())
+    try:
+        phrases = [f.get("phrase", "") for f in json.loads(row["findings"]) if f.get("phrase")]
+    except (ValueError, TypeError):
+        phrases = []
+
+    lowered = message.lower()
+    verdict = recorder.record_outcome(
+        challenge_id=int(row["id"]),
+        text=message,
+        cites=after_cites,
+        reads=ev["reads"],
+        executed=ev["executed"],
+        tools_since=max(0, uses - int(row["before_tools"])),
+        findings_after=[f["text"] for f in remaining],
+        evidence_gained=after_cites > int(row["before_cites"])
+        or (ev["executed"] and not int(row["before_exec"])),
+        claim_retracted=bool(phrases) and all(p.lower() not in lowered for p in phrases),
+        label_added=bool(LABEL_RE.search(message)) and not bool(LABEL_RE.search(row["before_text"])),
+    )
+    if verdict:
+        log(f"resolved challenge #{row['id']}: {verdict}")
+
+
 def handle_stop(data: dict, event: str) -> None:
     session_id = str(data.get("session_id", "") or "")
     prompt_id = str(data.get("prompt_id", "") or "no-prompt-id")
-
-    skipped = budget_exhausted(session_id, prompt_id)
-    if skipped:
-        log(f"{event} allow ({skipped})")
-        return
+    transcript = str(data.get("transcript_path", "") or "")
 
     message = str(data.get("last_assistant_message", "") or "").strip()
     if not message:
-        message = last_assistant_text(str(data.get("transcript_path", "") or ""))
+        message = last_assistant_text(transcript)
+
+    skipped = budget_exhausted(session_id, prompt_id)
+    if skipped:
+        # This is the revision the last challenge asked for. Score it, then let it stop.
+        uses = turn_tool_uses(transcript)
+        resolve(session_id, prompt_id, message, evidence(uses), len(uses))
+        log(f"{event} allow ({skipped})")
+        return
+
     if len(message) < max(0, env_int("ARE_YOU_SURE_MIN_CHARS", 120)):
         log(f"{event} allow (message too short to carry a claim)")
         return
 
-    uses = turn_tool_uses(str(data.get("transcript_path", "") or ""))
+    uses = turn_tool_uses(transcript)
     ev = evidence(uses)
     if ev["handing_off"] or is_handback(message):
         log(f"{event} allow (agent is handing the turn back to the user)")
@@ -465,7 +549,16 @@ def handle_stop(data: dict, event: str) -> None:
         log(f"{event} allow (could not record the challenge — refusing to risk a loop)")
         return
 
-    log(f"{event} BLOCK ({len(items)}): " + " | ".join(items))
+    recorder = db()
+    if recorder is not None:
+        recorder.record_challenge(
+            session_id=session_id, prompt_id=prompt_id, event=event, mode=mode(),
+            cwd=str(data.get("cwd", "") or ""),
+            rules=[f["rule"] for f in items], findings=items, text=message,
+            cites=cited(message), reads=ev["reads"], executed=ev["executed"], tools=len(uses),
+        )
+
+    log(f"{event} BLOCK ({len(items)}): " + " | ".join(f["text"] for f in items))
     emit({
         "hookSpecificOutput": {
             "hookEventName": event,
@@ -498,17 +591,37 @@ def selftest() -> int:
         items = findings(str(SELFTEST_BLOCK["last_assistant_message"]),
                          {"reads": 0, "executed": False, "handing_off": False},
                          "heuristic")
+        recorder = db()
         ok = len(items) >= 1 and bool(CONTRACT.strip())
         for item in items:
-            print(f"  caught: {item}")
+            print(f"  caught: {item['text']}")
         print(f"  contract: {len(CONTRACT)} chars")
+        print("  recorder:", "sqlite ready" if recorder and recorder.connect() else "unavailable")
         print("  RESULT:", "OK — the hook works in this environment" if ok else "FAIL")
     return 0 if ok else 1
 
 
 def main() -> int:
-    if "--selftest" in sys.argv[1:]:
+    args = sys.argv[1:]
+    if "--selftest" in args:
         return selftest()
+    if args and args[0] in ("dashboard", "--dashboard"):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import dashboard
+
+        return dashboard.main(args[1:])
+    if args and args[0] in ("rate", "--rate"):
+        recorder = db()
+        if recorder is None or len(args) < 3:
+            print("usage: rate <challenge-id> <improvement|no-improvement> [note]")
+            return 1
+        try:
+            cid = int(args[1])
+        except ValueError:
+            print(f"not a challenge id: {args[1]}")
+            return 1
+        print(recorder.rate(cid, args[2], " ".join(args[3:])))
+        return 0
     try:
         raw = sys.stdin.read()
     except OSError:

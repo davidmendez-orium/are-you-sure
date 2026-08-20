@@ -135,6 +135,7 @@ cannot talk its way past this one by describing a test run it never performed.
 | `ARE_YOU_SURE_MAX_PER_SESSION` | `25` | budget for a whole session |
 | `ARE_YOU_SURE_MIN_CHARS` | `120` | shorter messages are treated as conversation |
 | `ARE_YOU_SURE_LOG` | `~/.claude/logs/are-you-sure.log` | `off` to disable |
+| `ARE_YOU_SURE_DB` | `~/.claude/are-you-sure/challenges.db` | where the record lives |
 
 ## What it will not do
 
@@ -154,12 +155,86 @@ modes are handled deliberately:
 - **Never blocks small talk.** Under `ARE_YOU_SURE_MIN_CHARS` it does not look.
 - **Ignores quoted material.** Fenced blocks and `>` quotes are somebody else's words,
   not the agent's claims.
+- **Never punishes an honest hedge.** "I have not verified it" contains the word
+  *verified*, and an early version read that as a verification claim — inverting the
+  whole design, so the more truthful the answer the harder it got hit. Matches inside a
+  denial are skipped, per clause, so a disclaimer in one sentence can't launder a bare
+  claim in the next.
 - **Fails open, always.** Bad JSON, missing transcript, unexpected error — it exits 0
   and lets the agent stop. A broken checker must never cost you a session. The one
   exception: a *missing* transcript still challenges a verification claim, because
   absence of proof is exactly the thing being checked.
 - **Never mentions itself.** The challenge tells the agent not to narrate the check or
   apologise. You should see a better answer, not a report about being corrected.
+
+## Does it actually help?
+
+Every block is recorded, and the revision that follows is scored against it. Ask:
+
+```
+/are-you-sure dashboard
+```
+
+```
+ARE YOU SURE? — did the challenge improve the answer?
+
+  5 challenges recorded · 4 scored · 1 still open
+
+  IMPROVED THE ANSWER    50.0%   (2 of 4 scored)
+
+    improved   proof arrived — a citation, or a command that ran     1   25.0% ██████
+    hedged     claim withdrawn or labelled, no new evidence          1   25.0% ██████
+    unchanged  went looking, but the claim still stands unearned     1   25.0% ██████
+    ignored    nothing earned, nothing withdrawn                     1   25.0% ██████
+
+  WHAT CHANGED
+    evidence arrived (a citation or a command run)                   2   50.0%
+    the claim was retracted outright                                 2   50.0%
+    an honest label was added                                        1   25.0%
+    went back to the codebase after being challenged                 2   50.0%
+
+  HUMAN RATINGS   2 of 4 scored · measured verdict agrees 100.0%
+```
+
+**Nothing here asks a model whether its own rewrite was better.** That self-grade is
+the exact unearned claim this plugin exists to catch, so all four verdicts come from
+counting: did citations go up, did a command run that hadn't run before, is the phrase
+that triggered the challenge still present, do the checks still fire on the revision?
+
+The pairing is free — the stop *after* a block is the revision, so the same hook that
+issued the challenge scores the answer to it, with no extra model call.
+
+`improved` requires evidence specifically. Withdrawing a claim lands in `hedged`
+instead, because nearly every honest hedge also deletes the phrase that triggered the
+challenge — crediting retraction as proof would file most hedges as evidence and leave
+`hedged` permanently near-empty. The headline rate would be right while its breakdown
+lied about how the wins were earned.
+
+### The measurement is a proxy, so audit it
+
+Counting is not the same as judging. Rate one yourself:
+
+```
+/are-you-sure rate 7 no-improvement "reworded around the regex, no new proof"
+```
+
+The dashboard then reports how often the measured verdict agrees with the human. Where
+they disagree the human is right and the signals need work — that disagreement rate is
+the real measure of whether this is telling you anything.
+
+| | |
+|---|---|
+| Database | `~/.claude/are-you-sure/challenges.db` (`ARE_YOU_SURE_DB` to move it) |
+| Tables | `challenges` (what was caught, and the before-text) · `outcomes` (the revision, the deltas, the verdict, the human rating) |
+| Options | `--limit N`, `--rules` for per-rule win rates, `--json` to pipe it elsewhere |
+
+Both message texts are stored so a verdict can be re-derived later, which means the DB
+holds session content — it is local, and deleting the file is a clean reset.
+
+An open challenge stays open if the turn never stops again (you interrupted it). The
+dashboard counts those separately rather than scoring them as failures. Telemetry is
+also strictly optional: if the database can't be opened, the checker still blocks — a
+dead recorder must not silently disarm the thing it measures.
 
 ## The skill
 
@@ -184,15 +259,16 @@ missing UNVERIFIED label is how a blocker gets reported as done.
 
 ```
 python3 plugins/are-you-sure/tests/test_are_you_sure.py
+python3 plugins/are-you-sure/tests/test_tracking.py
 ```
 
-27 tests, stdlib `unittest`, no dependencies. They drive the hook as a subprocess with
+53 tests, stdlib `unittest`, no dependencies. They drive the hook as a subprocess with
 JSON on stdin exactly as Claude Code does, so the contract itself is what's covered —
 the loop guards, the handback cases, and the two transcript shapes that cost the most
 to learn: **tool results and system reminders both arrive as `type: "user"` rows**, and
 treating either as the start of your turn hides every tool call before it, so a
 well-evidenced message reads as unevidenced and gets challenged anyway. Real prompts
-carry `content` as a string; injections are flagged `isMeta`. All 27 pass on Python
+carry `content` as a string; injections are flagged `isMeta`. All 53 pass on Python
 3.14.6 / macOS.
 
 ## Repo layout
@@ -204,8 +280,11 @@ plugins/are-you-sure/
 ├── hooks/hooks.json                    wires all three events to one shim
 ├── hooks/are-you-sure.sh               interpreter shim + --selftest
 ├── hooks/are_you_sure.py               the checker — stdlib only
+├── hooks/ays_db.py                     the record + the measured verdict
+├── hooks/dashboard.py                  /are-you-sure dashboard
 ├── skills/are-you-sure/SKILL.md        the doctrine, and /are-you-sure
-└── tests/test_are_you_sure.py
+├── tests/test_are_you_sure.py          the checks and the loop guards
+└── tests/test_tracking.py              the record, the verdicts, the dashboard
 ```
 
 One script serves all three events and dispatches on `hook_event_name`. `plugin.json`

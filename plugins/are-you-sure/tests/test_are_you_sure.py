@@ -152,6 +152,31 @@ class TestVerificationClaims(HookCase):
         ))
         self.assertAllowed(result)
 
+    def test_saying_you_have_not_verified_is_not_a_verification_claim(self) -> None:
+        # The checker asks for honest labelling, so it must not punish it. Reading
+        # "I have not verified it" as a claim of verification inverts the whole
+        # design: the more truthful the answer, the harder it gets hit.
+        rows = [user_prompt(), tool_use("Read", file_path="/app/cache.ts"), tool_result()]
+        for message in (
+            "INFERRED, not yet run: the stale cache key looks like the likely cause, but "
+            "I have not verified it. Running the checkout suite would settle it." + PADDING,
+            "UNVERIFIED — I cannot confirm this without the staging credentials, and "
+            "nothing was tested on my side." + PADDING,
+            "I did not test the migration path; that is still unverified." + PADDING,
+        ):
+            with self.subTest(message=message[:48]):
+                self.assertAllowed(self.run_hook(self.stop_payload(message, rows)))
+
+    def test_a_negated_clause_does_not_excuse_a_claim_elsewhere(self) -> None:
+        # The scan is per clause, so a denial in one sentence must not launder a
+        # bare claim in the next.
+        rows = [user_prompt(), tool_use("Read", file_path="/app/cache.ts"), tool_result()]
+        reason = self.assertBlocked(self.run_hook(self.stop_payload(
+            "I did not touch the payment path. I verified the checkout fix works and all "
+            "tests pass." + PADDING, rows,
+        )))
+        self.assertIn("ran no test", reason)
+
     def test_lenient_mode_still_catches_it(self) -> None:
         rows = [user_prompt(), tool_use("Read", file_path="/app/x.ts"), tool_result()]
         result = self.run_hook(

@@ -6,7 +6,10 @@ description: >
   about that", "prove it", "verify that", "did you actually check", "/are-you-sure",
   or when you are about to assert something about a codebase you have not opened.
   Also the doctrine behind this plugin's Stop hook: read it when the hook blocks you
-  and you want the full method rather than the one-line challenge.
+  and you want the full method rather than the one-line challenge. Handles
+  "/are-you-sure dashboard" for the record of whether past challenges actually
+  improved the answers, and "/are-you-sure rate <id> improvement|no-improvement" to
+  supply the human verdict on one of them.
 ---
 
 # Are You Sure?
@@ -75,6 +78,33 @@ When a claim fails the four questions, there are exactly three ways out. Pick on
 **What is not an exit:** softening the wording. "Should be correct" carries the same
 claim as "is correct" and is worse, because it sounds like a hedge while still asking
 to be believed. Change what you assert, not how warmly you assert it.
+
+## Routing
+
+| Invocation | Do this |
+|---|---|
+| `/are-you-sure dashboard` | run the command below, print its output verbatim |
+| `/are-you-sure rate <id> <improvement\|no-improvement> [note]` | same, then confirm in one line |
+| `/are-you-sure` (bare), or any "are you sure / prove it" challenge | the audit below |
+
+For `dashboard` and `rate`, run exactly:
+
+```bash
+sh "$CLAUDE_PLUGIN_ROOT/hooks/are-you-sure.sh" dashboard          # add --rules, --limit N, --json
+sh "$CLAUDE_PLUGIN_ROOT/hooks/are-you-sure.sh" rate 7 improvement "went and ran the suite"
+```
+
+**Print the dashboard output as-is inside a code block. Do not summarise it, and do
+not editorialise the numbers** — the whole point of the record is that it says what it
+counted rather than what anyone hoped. If the improvement rate is poor, that is the
+finding; report it plainly.
+
+The verdicts are measured, never self-assessed: `improved` means proof arrived (a
+citation appeared, or a command ran that had not run before), `hedged` means the claim
+was withdrawn or labelled without new evidence, `unchanged` means something changed but
+the claim still stands unearned, `ignored` means nothing did. `human_rating` is empty
+until a person fills it in — if asked whether the hook is working, say how many are
+human-rated, because an unaudited measurement is a proxy, not an answer.
 
 ## When invoked directly
 
