@@ -228,6 +228,23 @@ the real measure of whether this is telling you anything.
 | Tables | `challenges` (what was caught, and the before-text) · `outcomes` (the revision, the deltas, the verdict, the human rating) |
 | Options | `--limit N`, `--rules` for per-rule win rates, `--json` to pipe it elsewhere |
 
+### In a browser
+
+```
+/are-you-sure dashboard --serve
+```
+
+Same numbers as a local page, with the rating buttons inline and the before/after text
+of each pair one click away. `--port N` to move it, `--no-open` to skip launching a
+browser.
+
+**It binds to `127.0.0.1` only, deliberately.** The record stores both message texts so
+a verdict can be re-derived, so this serves session content and has no business on a
+network interface. Stdlib `http.server`, no dependencies; stored text is escaped on the
+way into the page, because model output is not trusted markup. The page reloads itself
+only when the record actually changes, and that poll asks for ids and verdicts rather
+than shipping both message texts every four seconds.
+
 Both message texts are stored so a verdict can be re-derived later, which means the DB
 holds session content — it is local, and deleting the file is a clean reset.
 
@@ -262,13 +279,13 @@ python3 plugins/are-you-sure/tests/test_are_you_sure.py
 python3 plugins/are-you-sure/tests/test_tracking.py
 ```
 
-53 tests, stdlib `unittest`, no dependencies. They drive the hook as a subprocess with
+61 tests, stdlib `unittest`, no dependencies. They drive the hook as a subprocess with
 JSON on stdin exactly as Claude Code does, so the contract itself is what's covered —
 the loop guards, the handback cases, and the two transcript shapes that cost the most
 to learn: **tool results and system reminders both arrive as `type: "user"` rows**, and
 treating either as the start of your turn hides every tool call before it, so a
 well-evidenced message reads as unevidenced and gets challenged anyway. Real prompts
-carry `content` as a string; injections are flagged `isMeta`. All 53 pass on Python
+carry `content` as a string; injections are flagged `isMeta`. All 61 pass on Python
 3.14.6 / macOS.
 
 ## Repo layout
@@ -282,6 +299,7 @@ plugins/are-you-sure/
 ├── hooks/are_you_sure.py               the checker — stdlib only
 ├── hooks/ays_db.py                     the record + the measured verdict
 ├── hooks/dashboard.py                  /are-you-sure dashboard
+├── hooks/ays_serve.py                  --serve, localhost only
 ├── skills/are-you-sure/SKILL.md        the doctrine, and /are-you-sure
 ├── tests/test_are_you_sure.py          the checks and the loop guards
 └── tests/test_tracking.py              the record, the verdicts, the dashboard

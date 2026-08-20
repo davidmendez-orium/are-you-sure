@@ -281,5 +281,96 @@ class TestNeverBreaksTheHook(Cycle):
         self.assertIsNotNone(self.stop(CLAIM, []), "the block must still be issued")
 
 
+
+
+class TestServe(Cycle):
+    """The --serve page, driven over real HTTP against a real socket."""
+
+    def start(self):
+        import threading
+        import os
+        sys.path.insert(0, str(HOOKS))
+        os.environ["ARE_YOU_SURE_DB"] = str(self.db)
+        import importlib
+        import ays_db as _db
+        import ays_serve
+        importlib.reload(_db)
+        importlib.reload(ays_serve)
+        from http.server import ThreadingHTTPServer
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), ays_serve.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        self.addCleanup(httpd.server_close)
+        return f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def get(self, base: str, path: str = "/") -> tuple[int, str]:
+        import urllib.request
+        with urllib.request.urlopen(base + path, timeout=10) as r:
+            return r.status, r.read().decode()
+
+    def test_it_binds_to_localhost_only(self) -> None:
+        # The record holds session content; it must not reach a network interface.
+        src = (HOOKS / "ays_serve.py").read_text()
+        self.assertIn('("127.0.0.1", chosen)', src)
+        self.assertNotIn('("0.0.0.0"', src)
+
+    def test_the_page_renders_the_rate_and_the_rows(self) -> None:
+        base = self.start()
+        self.cycle(
+            "Built at src/cache/key.ts:31; `npm test` reports 14 passed.",
+            before=[], after=[tool("Bash", command="npm test"), result()],
+        )
+        status, body = self.get(base)
+        self.assertEqual(status, 200)
+        self.assertIn("improved the answer", body)
+        self.assertIn("100.0%", body)
+        self.assertIn("uncited-conclusion", body)
+        self.assertIn("unaudited", body)
+
+    def test_an_empty_record_says_so(self) -> None:
+        status, body = self.get(self.start())
+        self.assertEqual(status, 200)
+        self.assertIn("No challenges recorded yet", body)
+
+    def test_stored_text_is_escaped_not_injected(self) -> None:
+        base = self.start()
+        self.assertIsNotNone(self.stop(CLAIM, []))
+        self.assertIsNone(self.stop(
+            "<script>alert('xss')</script> The root cause is a stale cache key and "
+            "nothing else references that helper, so this is safe to land here.", []))
+        _, body = self.get(base)
+        self.assertIn("&lt;script&gt;", body)
+        self.assertNotIn("<script>alert", body)
+
+    def test_rating_from_the_page_persists_and_redirects(self) -> None:
+        import urllib.request
+        import urllib.parse
+        base = self.start()
+        self.cycle(CLAIM, before=[], after=[])
+        data = urllib.parse.urlencode(
+            {"id": "1", "rating": "no-improvement", "note": "reworded only"}).encode()
+        req = urllib.request.Request(base + "/rate", data=data, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            self.assertEqual(r.status, 200)      # redirect followed to /
+        out = rows(self.db, "outcomes")[0]
+        self.assertEqual(out["human_rating"], "no-improvement")
+        self.assertEqual(out["note"], "reworded only")
+        _, body = self.get(base)
+        self.assertIn("your rating", body)
+
+    def test_the_api_route_serves_json(self) -> None:
+        base = self.start()
+        self.cycle(CLAIM, before=[], after=[])
+        status, body = self.get(base, "/api")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["rows"][0]["verdict"], "ignored")
+
+    def test_an_unknown_route_is_a_404(self) -> None:
+        import urllib.error
+        base = self.start()
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.get(base, "/nope")
+        self.assertEqual(caught.exception.code, 404)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

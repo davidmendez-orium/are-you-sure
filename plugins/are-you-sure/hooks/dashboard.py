@@ -38,12 +38,21 @@ def pct(n: int, total: int) -> str:
     return f"{100 * n / total:>5.1f}%" if total else "    — "
 
 
-def fetch(conn: sqlite3.Connection) -> dict:
+SLIM_COLUMNS = "c.id, o.verdict, o.human_rating"
+
+FULL_COLUMNS = (
+    "c.id, c.ts, c.mode, c.rules, c.findings, c.before_text, c.before_chars,"
+    " c.before_cites, c.before_exec, o.verdict, o.after_text, o.after_chars,"
+    " o.after_cites, o.after_exec, o.tools_since, o.evidence_gained,"
+    " o.claim_retracted, o.label_added, o.human_rating, o.note, o.findings_after"
+)
+
+
+def fetch(conn: sqlite3.Connection, slim: bool = False) -> dict:
+    """`slim` is for the browser's refresh poll, which only compares ids and
+    verdicts — no reason to ship both message texts every few seconds."""
     rows = conn.execute(
-        "SELECT c.id, c.ts, c.mode, c.rules, c.findings, c.before_chars, c.before_cites,"
-        " c.before_exec, o.verdict, o.after_chars, o.after_cites, o.after_exec,"
-        " o.tools_since, o.evidence_gained, o.claim_retracted, o.label_added,"
-        " o.human_rating, o.note, o.findings_after"
+        f"SELECT {SLIM_COLUMNS if slim else FULL_COLUMNS}"
         " FROM challenges c LEFT JOIN outcomes o ON o.challenge_id = c.id"
         " ORDER BY c.id DESC"
     ).fetchall()
@@ -155,9 +164,8 @@ def render(rows: list[dict], limit: int, show_rules: bool) -> str:
 
 def main(argv: list[str]) -> int:
     limit, show_rules, as_json = 10, False, False
-    it = iter(range(len(argv)))
-    for i in it:
-        arg = argv[i]
+    do_serve, port, open_browser = False, 8787, True
+    for i, arg in enumerate(argv):
         if arg == "--limit" and i + 1 < len(argv):
             try:
                 limit = max(1, int(argv[i + 1]))
@@ -167,10 +175,24 @@ def main(argv: list[str]) -> int:
             show_rules = True
         elif arg == "--json":
             as_json = True
+        elif arg == "--serve":
+            do_serve = True
+        elif arg == "--no-open":
+            open_browser = False
+        elif arg == "--port" and i + 1 < len(argv):
+            try:
+                port = int(argv[i + 1])
+            except ValueError:
+                pass
         elif arg == "--db" and i + 1 < len(argv):
             import os
 
             os.environ["ARE_YOU_SURE_DB"] = argv[i + 1]
+
+    if do_serve:
+        import ays_serve
+
+        return ays_serve.serve(port=port, open_browser=open_browser)
 
     conn = ays_db.connect()
     if conn is None:
